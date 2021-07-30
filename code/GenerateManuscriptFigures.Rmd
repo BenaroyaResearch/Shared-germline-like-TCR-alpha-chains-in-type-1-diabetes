@@ -1,0 +1,1788 @@
+---
+title: "Manuscript Figures - Kaitlin's"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    number_sections: true
+editor_options: 
+  chunk_output_type: console
+---
+
+#Summary 
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(dplyr)
+library(viridis)
+library(stringr)
+library(tidyr)
+library(readxl)
+library(RColorBrewer)
+library(zoo)
+library(forcats)
+library(ggplot2); theme_set(
+  theme_bw(20) +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_rect(colour="black", fill=NA, size=1),
+          axis.text=element_text(colour="black"),
+          axis.ticks=element_line(colour="black"),
+          legend.key = element_blank(),
+          text = element_text(size=16),
+          strip.text.x = element_text(size = 16,margin = margin( b = 4, t = 2) ),
+          strip.background = element_rect(fill="white", colour="black")))
+library(kableExtra)
+library(egg)
+library(scales)
+library(inlmisc)
+library(gtools)
+library(TCRtools) #BRI github package
+library(circlize)
+library(ggbeeswarm)
+library(tcrGraph)
+library(igraph)
+library(graphlayouts)
+library(ggraph)
+library(gridExtra)
+library(stringdist)
+
+opts_chunk$set(fig.width=6, fig.height=4.0, cache = FALSE, echo=FALSE, warning=FALSE, message=FALSE)
+opts_knit$set(root.dir = "/Users/hdeberg/Box/P91_Karen_Peter_T1D/Fari_TCRspecificity")
+```
+
+```{r set_up_directories, cache = TRUE}
+
+base_dir <- "/Users/hdeberg/Box/P91_Karen_Peter_T1D/Fari_TCRspecificity"
+data_dir <- file.path(base_dir, "data")
+plot_dir <- file.path(base_dir, "plots")
+table_dir <- file.path(base_dir, "tables")
+
+```
+
+```{r read_in_table_s3}
+
+clone_list <- read_excel(file.path(data_dir,
+                                   "TableS3.xlsx"),
+                         sheet = "MasterList")
+
+tcrs <- read_excel(file.path(data_dir, "TableS3.xlsx"),
+                   sheet = "SpecificityDetermined")
+
+titration <- read.csv(file.path(data_dir, "TitrationInfo.csv")) 
+
+fits <- read_excel(file.path(data_dir, "TableS3.xlsx"),
+                   sheet = "EC50s",
+                   skip = 1) %>%
+  dplyr::rename(median = `median...4`,
+                lin_median = `median...10`)
+
+tcrs$peptide_specificity <- fct_relevel(tcrs$peptide_specificity, "galactosylceramide", after = Inf)
+tcrs$peptide_specificity <- fct_relevel(tcrs$peptide_specificity, "multiple", after = Inf)
+tcrs$peptide_specificity <- fct_relevel(tcrs$peptide_specificity, "none", after = Inf)
+
+tcrs <- tcrs %>%
+  dplyr::mutate(broad_group = case_when(study_group == "HC" ~ "HC",
+                                        str_detect(study_group, "T1D") ~ "T1D",
+                                        TRUE ~ "Other"))
+
+#Read in pgen info
+#Only keep a few columns - the cloneIDs, sharing level, etc were from an older version of the analysis
+
+pgen_alpha <- read.csv(file.path(data_dir,"pgen", "120720_TCR_MasterList_w_CloneIDs_a_pgen.csv")) %>%
+  dplyr::select(libid, junction, chain, pgen)
+
+pgen_beta <- read.csv(file.path(data_dir, "pgen", "120720_TCR_MasterList_w_CloneIDs_b_pgen.csv")) %>%
+  dplyr::select(libid, junction, chain, pgen)
+
+pgen <- bind_rows(pgen_alpha,
+                  pgen_beta)
+
+npod_anno <- read.csv(file.path(data_dir,
+                                "feature_heatmap_feature_annotations.csv"))
+
+npod_matrix <- read.csv(file.path(data_dir,
+                                  "feature_heatmap_matrix.csv"),
+                        header = F)
+
+npod_subjects <- read.csv(file.path(data_dir,
+                                  "feature_heatmap_example_annotations.csv"))
+
+vdjdb <- read.delim(file.path(data_dir,
+                              "SearchTable-2020-07-31 23_07_46.457.txt"))
+```
+
+```{r subset_to_study_cells}
+
+#Remove inkt and naive cells
+
+memory_chains <- clone_list %>%
+  dplyr::filter(!inkt,
+                !CD45RA)
+
+#Check filter
+##table(memory_chains$inkt, memory_chains$CD45RA)
+
+#Stats
+# nrow(memory_chains)
+# table(memory_chains$study_group)
+```
+
+
+```{r set_colors_get_study_group_subsets}
+
+hc_chains <- memory_chains %>%
+  dplyr::filter(study_group == "HC")
+
+newt1d_chains <- memory_chains %>%
+  dplyr::filter(study_group == "new onset T1D") 
+
+t1d_chains <- memory_chains %>%
+  dplyr::filter(study_group == "T1D") 
+
+n_hc_donors <- length(unique(hc_chains$donor_id))
+n_newt1d_donors <- length(unique(newt1d_chains$donor_id))
+n_t1d_donors <- length(unique(t1d_chains$donor_id))
+
+set.seed(1234)
+
+red_colors <- colorRampPalette(c("bisque1", "hotpink", "red", "firebrick4"))(n_hc_donors) %>% sample()
+
+purple_colors <- colorRampPalette(c("magenta1", "maroon4", "orchid1", "purple3", "plum1", "darkmagenta"))(n_newt1d_donors) %>% sample()
+
+blue_colors <- colorRampPalette(c("cadetblue4", "darkslateblue", "skyblue", "royalblue2", "navy"))(n_t1d_donors) %>% sample()
+
+names(red_colors) = unique(hc_chains$donor_id) 
+names(purple_colors) = unique(newt1d_chains$donor_id) 
+names(blue_colors) = unique(t1d_chains$donor_id) 
+
+donor_colors <- c(red_colors, purple_colors, blue_colors)
+
+#Set up colors
+
+group_colors <- c("HC" = "cadetblue",
+                  "T1D" = "darkred",
+                  "HA" = "black")
+
+broad_specificity_colors <- c("GAD" = "red",
+                              "galactosyceramide" = "orange",
+                              "IGRP" = "cadetblue",
+                              "multiple" = "olivedrab",
+                              "none" = "gray",
+                              "ZNP" = "violet")
+
+peptide_specificity_colors <- c("GADp14" = "firebrick",
+                                  "GADp15" = "red",
+                                  "GADp34" = "coral",
+                                  "GADp45" = "indianred",
+                                  "GADp48" = "darkred",
+                                  "GADp70" = "salmon",
+                                  "IGRP31" = "cadetblue",
+                                  "IGRP39" = "slateblue",
+                                  "ZNP1" = "orange",
+                                  "ZNP28" = "goldenrod",
+                                  "HA" = "black")
+
+sharing_colors <- c('#66c2a5','#fc8d62', 'gray')
+
+```
+
+```{r useful_functions}
+
+#For plotting
+scientific_10 <- function(x) {
+  xout <- gsub("e", " %*% 10^", scales::scientific_format()(x))
+  return(parse(text=xout))
+}
+
+```
+
+```{r plot_circos_function}
+
+plot_circos <- function(tcrs_selected,
+                        filename) {
+#Order by donor ID
+tcrs_selected <- tcrs_selected[mixedorder(tcrs_selected$donor_id),]
+
+#Give each lib ID a numeric label
+tcrs_selected <-
+  tcrs_selected %>%
+  dplyr::rename(old_libid=libid)
+
+tcrs_selected$libid <-
+  tcrs_selected$old_libid %>%
+  match(unique(.))
+
+### determine expanded TCRs
+tcr_chain_matches <- match_TCR_chains(tcrs_selected)
+tcr_chain_matches[,c("tcr1","tcr2")] <-
+  lapply(tcr_chain_matches[,c("tcr1","tcr2")], as.character)
+
+### tabulate number of chains matching between cells
+tcr_links <-
+  tabulate_shared_TCR_chains(tcr_chain_matches) %>%
+  dplyr::arrange(tcr1) %>%
+  dplyr::mutate(tcr1 = as.numeric(tcr1))
+
+tcr_links <- tcr_links %>% 
+  unite("link", tcr1, tcr2, sep="-", remove=F) 
+
+
+tcrs_selected <-
+  unique(tcrs_selected[, c("libid", "donor_id", "project", "study_group", "old_libid")]) %>%
+  dplyr::rename(tcr1=libid )%>%
+  dplyr::arrange(tcr1)
+
+tcrs_selected$color <- donor_colors[match(tcrs_selected$donor_id, names(donor_colors))]
+
+tcr_links$color <-
+  tcrs_selected$color[match(tcr_links$tcr1, tcrs_selected$tcr1)]
+
+# define limits for plotting
+n_cells <- nrow(tcrs_selected)
+tcrs_selected$xmin <- 0
+tcrs_selected$xmax = n_cells
+
+quartz(width=7,height=7,dpi=72)
+
+par(mar=rep(0,4))
+    
+circos.clear()
+
+#basic circos graphic parameters
+circos.par(cell.padding=c(0,0,0,0), track.margin=c(0,0.15), start.degree = 90, gap.degree =0)
+
+#sector details
+circos.initialize(factors = tcrs_selected$tcr1, xlim = cbind(tcrs_selected$xmin, tcrs_selected$xmax))
+
+#plot sectors
+circos.trackPlotRegion(ylim = c(0, 2), 
+                       factors = tcrs_selected$tcr1, 
+                       track.height=0.1,
+                       #panel.fun for each sector
+                       panel.fun = function(x, y) {
+                         #select details of current sector
+                         name = get.cell.meta.data("sector.index")
+                         i = get.cell.meta.data("sector.numeric.index")
+                         xlim = get.cell.meta.data("xlim")
+                         ylim = get.cell.meta.data("ylim")
+                         
+                         circos.rect(xleft=xlim[1], ybottom=ylim[1], xright=xlim[2], ytop=ylim[2], col = tcrs_selected$color[i], border=tcrs_selected$color[i])
+                         
+                        
+                         #plot axis
+                         circos.axis(labels.cex=0.00000001,
+                                     major.tick = FALSE)
+                       })
+
+
+tcrs_selected$sum <- length(unique(tcr_links$tcr1))
+
+#Plot links
+
+for (k in 1:nrow(tcr_links)) {
+          # for(k in 1){
+          # determine row of tcr_cells to use for coloring
+          i <- match(tcr_links$tcr1[k], tcrs_selected$tcr1)
+          j <- match(tcr_links$tcr2[k], tcrs_selected$tcr1)
+
+          # draw links, colored by selected variable
+          circlize::circos.link(
+            sector.index1=tcrs_selected$tcr1[i], point1=c(tcrs_selected$sum[i]),
+            sector.index2=tcrs_selected$tcr1[j], point2=c(tcrs_selected$sum[j]),
+            col = tcr_links[k, "color", drop=TRUE], rou1=0.75, rou2=0.75,
+            lwd = tcr_links[k, "num_shared_chains", drop=TRUE]*1.5)
+}
+
+quartz.save(file.path(plot_dir, filename), type = "pdf", device = dev.cur(), dpi = 100)
+
+return()
+
+
+}
+
+```
+
+#Figure 1B
+
+```{r fig_1_b, fig.height=4.5, fig.width=5}
+
+g_1b <- tcrs %>%
+  dplyr::mutate(seq_name = recode(broad_specificity, 
+                                  "none" = "Other",
+                                  "galactosylceramide" = "Other",
+                                  "multiple" = "GAD65",
+                                  "GAD" = "GAD65",
+                                  "ZNP" = "ZNT8"),
+                seq_name = factor(seq_name,
+                                  levels = c("GAD65",
+                                             "IGRP",
+                                             "ZNT8",
+                                             "Other"))) %>%
+  ggplot(aes(x= seq_name,
+           fill = broad_group,
+           group = interaction(cloneID, broad_group)))+
+  geom_bar(colour = "black")+
+  scale_fill_manual(values = group_colors,
+                    drop = FALSE)+
+  labs(x = "",
+       y = "Number of TCRs",
+       fill = "")+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) 
+
+print(g_1b)
+
+pdf(file.path(plot_dir, "Figure1B.pdf"),
+    height=4,
+    width=5)
+
+print(g_1b)
+
+invisible(dev.off())
+
+```
+
+#Figure 2A
+
+```{r fig_2a}
+
+plot_circos(hc_chains,
+            "HCCircos20210722.pdf")
+
+```
+
+#Figure 2B
+
+```{r fig_2b}
+
+plot_circos(newt1d_chains,
+            "NewT1DCircos20210722.pdf")
+
+```
+
+#Figure 2C
+
+```{r fig_2c}
+
+plot_circos(t1d_chains,
+            "T1DCircos20210722.pdf")
+
+```
+
+#Figure 2D
+
+```{r figure_2d, fig.height=4, fig.width=6}
+
+table(memory_chains$study_group[memory_chains$tcrGraph_sharing_level %in% c("private",
+                                                                            "public")])
+ # HC new onset T1D           T1D 
+ #          274           560           561 
+
+#Subset to private/public
+exp_chains <- memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level %in% c("private",
+                                              "public"))
+
+#Downsample to 2/3 the smallest group
+n_cells = round(274*(2/3))
+reps = 1000
+
+chain_counts <- NULL
+
+set.seed(5678)
+
+for(i in 1:reps){
+  
+  sampled_chains <- exp_chains %>%
+    dplyr::group_by(study_group) %>%
+    dplyr::sample_n(n_cells)
+  
+  #Check
+  table(sampled_chains$study_group)
+  
+  #Count #'s of public and private chains for each group
+  chain_counts_i <- sampled_chains %>%
+    dplyr::group_by(study_group, tcrGraph_sharing_level) %>%
+    dplyr::summarise(n_chains = n()) %>%
+    dplyr::mutate(iteration = i) 
+  
+  chain_counts <- rbind(chain_counts, chain_counts_i)
+
+} 
+
+#Take the median over all iterations
+sum_chain_counts <- chain_counts %>%
+  dplyr::group_by(study_group, tcrGraph_sharing_level) %>%
+  dplyr::summarise(median_n_chains = median(n_chains),
+                   median_frac = median(n_chains/n_cells))
+
+sum_chain_counts$study_group[sum_chain_counts$study_group == "new onset T1D"] <- "newT1D"
+
+g_fig_2d <- sum_chain_counts %>%
+  ggplot(aes(x = study_group,
+           y = median_frac,
+           fill = tcrGraph_sharing_level)) +
+  geom_col() +
+  scale_fill_manual(values = sharing_colors)+
+  labs(x = "",
+       y = "Fraction expanded junctions",
+       fill = "")
+
+print(g_fig_2d)
+
+pdf(file.path(plot_dir,
+              "Figure2D.pdf"),
+    height = 4,
+    width = 5)
+
+print(g_fig_2d)
+
+invisible(dev.off())
+
+#Status - use Fisher's test between each two vars
+
+hc_newt1d <- sum_chain_counts %>%
+  dplyr::filter(study_group %in% c("HC", "newT1D")) %>%
+  pivot_wider(id_cols = "study_group",
+              names_from = "tcrGraph_sharing_level",
+              values_from = "median_n_chains") %>%
+  dplyr::ungroup() %>%
+  dplyr::select(private, public) %>%
+  as.matrix()
+  
+fisher.test(hc_newt1d)
+hc_newt1d_p <- fisher.test(hc_newt1d)$p.value
+
+hc_t1d <- sum_chain_counts %>%
+  dplyr::filter(study_group %in% c("HC", "T1D")) %>%
+  pivot_wider(id_cols = "study_group",
+              names_from = "tcrGraph_sharing_level",
+              values_from = "median_n_chains") %>%
+  dplyr::ungroup() %>%
+  dplyr::select(private, public) %>%
+  as.matrix()
+  
+fisher.test(hc_t1d)
+hc_t1d_p <- fisher.test(hc_t1d)$p.value
+
+newt1d_t1d <- sum_chain_counts %>%
+  dplyr::filter(study_group %in% c("newT1D", "T1D")) %>%
+  pivot_wider(id_cols = "study_group",
+              names_from = "tcrGraph_sharing_level",
+              values_from = "median_n_chains") %>%
+  dplyr::ungroup() %>%
+  dplyr::select(private, public) %>%
+  as.matrix()
+  
+fisher.test(newt1d_t1d)
+
+newt1d_t1d_p <- fisher.test(newt1d_t1d)$p.value
+
+p.adjust(c(hc_newt1d_p, hc_t1d_p, newt1d_t1d_p), method = "fdr")
+
+```
+
+#Figure 2E
+
+```{r figure_2e, fig.height=4, fig.width=6}
+
+titration$clone_spec <- paste0(titration$peptide_specificity, 
+                              ",\n", 
+                              titration$cloneID)
+
+titration$clone_spec[titration$clone_spec == "HA,\nNA"] <- "HA,\nControl"
+
+titration$clone_spec <- factor(titration$clone_spec)
+
+titration$clone_spec <- fct_relevel(titration$clone_spec,
+                                    "HA,\nControl",
+                                    after = Inf)
+
+titration$sharing_group <- clone_list$tcrGraph_sharing_level[match(titration$cloneID,
+                                                                   clone_list$cloneID)] 
+
+titration_gad_113_132 <- titration %>%
+  dplyr::filter(peptide_specificity %in% c("GAD65 113-132", "HA")) %>%
+  dplyr::filter(concentration != 0.0001) %>%
+  droplevels()
+
+titration_gad_113_132$cloneID <- fct_expand(titration_gad_113_132$cloneID, "HA")
+
+titration_gad_113_132$cloneID[titration_gad_113_132$peptide_specificity == "HA"] <- "HA"
+titration_gad_113_132$sharing_group[titration_gad_113_132$peptide_specificity == "HA"] <- "Public"
+
+titration_gad_113_132$sharing_group <- str_to_sentence(titration_gad_113_132$sharing_group)
+
+titration_gad_113_132$cloneID <- factor(titration_gad_113_132$cloneID,
+                                        levels = c("HA",
+                                                   "Clone_262",
+                                                   "Clone_271",
+                                                   "Clone_640",
+                                                   "Clone_667",
+                                                   "Clone_904",
+                                                   "Clone_2062"))
+
+n_clones <- length(unique(titration_gad_113_132$cloneID))
+cloneID_colors <- c(GetColors(n_clones, "bright"))
+names(cloneID_colors) <- unique(titration_gad_113_132$cloneID) 
+
+cloneID_colors <- c("HA" = "#000000", cloneID_colors)
+
+font_size <- 16
+
+plot_layers <- list(scale_x_log10(labels = scientific_10),
+                    labs(x= expression("Peptide concentration, " * mu*"g/mL"), 
+                         y = "Percent proliferation\nabove background"), 
+                 theme(text = element_text(size=font_size))) 
+
+
+g_2e <- ggplot(data = titration_gad_113_132,
+       aes(x = concentration,
+           y = bg_subtracted_proliferation,
+           group = cloneID,
+           color = cloneID,
+           shape = sharing_group))+
+  geom_point(size=3)+
+  geom_line()+
+  scale_color_manual(values = cloneID_colors, 
+                    name = "")+ 
+  scale_shape_manual(values = c(16,1,2),
+                     name = "")+
+  plot_layers+
+  #facet_wrap(~peptide_specificity, ncol = 1) +
+  guides(color=guide_legend(nrow=7))+
+  theme(text = element_text(size=18),
+        axis.text.x = element_text(angle = -60, hjust = 0))
+
+print(g_2e)
+
+pdf(file.path(plot_dir, "Figure2E.pdf"),
+    height=4,
+    width=6)
+
+print(g_2e)
+
+invisible(dev.off())
+
+```
+
+#Figure 3A
+
+```{r fig_3_a}
+
+junc_freq <- exp_chains %>%
+  dplyr::group_by(donor_id) %>%
+  dplyr::mutate(n_tot_chains = n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(junction, chain, donor_id, n_tot_chains, tcrGraph_sharing_level) %>%
+  dplyr::summarize(n_chain = n()) %>%
+  dplyr::mutate(freq = n_chain/n_tot_chains)
+  
+g_fig_3a <- junc_freq %>%
+  ggplot(aes(x = tcrGraph_sharing_level,
+             y = log2(freq))) +
+  geom_violin(#draw_quantiles = c(0.5), 
+                stat = "ydensity", 
+                osition = "dodge", 
+                fill = "#8da0cb", 
+                lwd = 1.5)  + 
+   geom_dotplot(position = "identity", 
+                method = "histodot", 
+                binaxis = "y", 
+                stackdir = "center", 
+                dotsize = 0.2, 
+                colour = "black") +
+  scale_y_continuous(limits = c(-7.5, 1), breaks = c(0, -2.5, -5.0, -7.5))+
+  labs(x = "Sharing",
+       y = "log2(Junction frequency)")+
+  facet_wrap(~chain, ncol = 2)
+
+print(g_fig_3a)
+
+pdf(file.path(plot_dir,
+              "Figure3A.pdf"),
+    height = 4,
+    width = 5.5)
+
+print(g_fig_3a)
+
+invisible(dev.off())
+
+#Stats
+
+wilcox_alpha <- wilcox.test(junc_freq$freq[junc_freq$chain == "a"] ~ junc_freq$tcrGraph_sharing_level[junc_freq$chain == "a"])
+
+wilcox_beta <- wilcox.test(junc_freq$freq[junc_freq$chain == "b"] ~ junc_freq$tcrGraph_sharing_level[junc_freq$chain == "b"])
+
+p_vals <- c("alpha" = wilcox_alpha$p.value,
+            "beta" = wilcox_beta$p.value)
+
+fdr <- p.adjust(p_vals, method = "fdr")
+
+test_a <- ks.test(junc_freq$freq[junc_freq$chain == "a" & junc_freq$tcrGraph_sharing_level == "private"], junc_freq$freq[junc_freq$chain == "a" & junc_freq$tcrGraph_sharing_level == "public"])$p.value
+
+test_b <- ks.test(junc_freq$freq[junc_freq$chain == "b" & junc_freq$tcrGraph_sharing_level == "private"], junc_freq$freq[junc_freq$chain == "b" & junc_freq$tcrGraph_sharing_level == "public"])$p.value
+
+fdr <- p.adjust(c(test_a, test_b), method = "fdr")
+
+```
+
+#Figure 3B
+
+```{r fig_3_b}
+
+exp_non_dups <-  memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level %in% c("public", "private"),
+                !duplicated(junction))
+
+exp_non_dups$len <- nchar(exp_non_dups$junction) # junctiom length, as per IMGT, includes initial C and ultimate F or W
+
+g_fig_3b <- exp_non_dups %>%
+  ggplot(aes(x = len, y = ..scaled..))  + 
+  geom_density(aes(color = tcrGraph_sharing_level), 
+               kernel = c("gaussian"), 
+               adjust = 0.3) + 
+  scale_color_manual(values = sharing_colors) +
+  labs(x = "Junction length (number of amino acids)",
+       y = "Density, scaled") +
+  scale_x_continuous(breaks = c(10, 12, 14, 16, 18))+
+  facet_wrap(~chain,
+             scales = "free_y") 
+
+print(g_fig_3b)
+
+pdf(file.path(plot_dir,
+              "Figure3B.pdf"),
+    height = 4,
+    width = 10)
+
+print(g_fig_3b)
+
+invisible(dev.off())
+
+alpha_ks <- ks.test(exp_non_dups$len[exp_non_dups$chain == "a" &
+                                       exp_non_dups$tcrGraph_sharing_level == "private"],
+                    exp_non_dups$len[exp_non_dups$chain == "a" &
+                                       exp_non_dups$tcrGraph_sharing_level == "public"])
+
+beta_ks <- ks.test(exp_non_dups$len[exp_non_dups$chain == "b" &
+                                       exp_non_dups$tcrGraph_sharing_level == "private"],
+                    exp_non_dups$len[exp_non_dups$chain == "b" &
+                                       exp_non_dups$tcrGraph_sharing_level == "public"])
+
+p_vals <- c("alpha" = alpha_ks$p.value,
+            "beta" = beta_ks$p.value)
+
+fdr <- p.adjust(p_vals, method = "fdr")
+
+```
+
+#Figure 3C
+
+```{r add_pgen_to_mem_chains}
+
+#Add pgen to memory_chains
+
+memory_chains <- left_join(memory_chains,
+                                pgen,
+                                by = c("libid", "junction", "chain"))
+
+```
+
+```{r fig_3_c}
+
+exp_non_dups <-  memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level %in% c("public", "private"),
+                !duplicated(junction))
+
+g_fig_3c <-exp_non_dups %>%
+  ggplot(aes(x = tcrGraph_sharing_level,
+             y = log10(pgen))) +
+  geom_violin(#draw_quantiles = c(0.5), 
+                stat = "ydensity", 
+                osition = "dodge", 
+                fill = "#8da0cb", 
+                lwd = 1.5)  + 
+   geom_dotplot(position = "identity", 
+                method = "histodot", 
+                binaxis = "y", 
+                stackdir = "center", 
+                dotsize = 0.2, 
+                colour = "black") +
+  scale_y_continuous(limits = c(-30, 0), breaks = c(0, -10, -20, -30))+
+  labs(x = "Sharing",
+       y = "log10(Pgen)")+
+  facet_wrap(~chain, ncol = 2)
+  
+print(g_fig_3c)
+
+pdf(file.path(plot_dir,
+              "Figure3C.pdf"),
+    height = 4,
+    width = 5.5)
+
+print(g_fig_3c)
+
+invisible(dev.off())
+
+#Stats
+
+wilcox_alpha <- wilcox.test(exp_non_dups$pgen[exp_non_dups$chain == "a"] ~ exp_non_dups$tcrGraph_sharing_level[exp_non_dups$chain == "a"])
+
+wilcox_beta <- wilcox.test(exp_non_dups$pgen[exp_non_dups$chain == "b"] ~ exp_non_dups$tcrGraph_sharing_level[exp_non_dups$chain == "b"])
+
+p_vals <- c("alpha" = wilcox_alpha$p.value,
+            "beta" = wilcox_beta$p.value)
+
+fdr <- p.adjust(p_vals, method = "fdr")
+```
+
+#Figure 3D
+
+```{r npod_matches}
+
+#The NPOD data has beta chains only and CDR3s, not junctions
+
+exp_non_dups$cdr3 <- exp_non_dups$junction %>%
+  str_remove("^C") %>%
+  str_remove("F$|W$|V$")
+
+exp_non_dups_beta <- exp_non_dups %>%
+  dplyr::filter(chain ==  "b")
+
+#Get npod CDR3s that were found in at least one nPOD sample
+npod_matches = npod_matrix
+row.names(npod_matches) = npod_anno$feature
+colnames(npod_matches) = npod_subjects$donor
+matrix_row_sums <- rowSums(npod_matches > 0) #Count donors with non-zero freq of the indicated TCR
+det_npod <- rownames(npod_matches)[matrix_row_sums > 0]
+
+exp_non_dups_beta$npod_match <- exp_non_dups_beta$cdr3 %in% det_npod
+table(exp_non_dups_beta$tcrGraph_sharing_level, exp_non_dups_beta$npod_match)
+
+fisher.test(exp_non_dups_beta$tcrGraph_sharing_level, exp_non_dups_beta$npod_match)
+
+tcr_counts <- exp_non_dups_beta %>%
+  dplyr::group_by(tcrGraph_sharing_level, npod_match) %>%
+  dplyr::summarise(n_tcrs = n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(tcrGraph_sharing_level) %>%
+  dplyr::mutate(n_level = sum(n_tcrs),
+                freq = n_tcrs/n_level)
+
+g_fig_3d <- tcr_counts%>%
+  ggplot()+
+  geom_col(aes(x = tcrGraph_sharing_level,
+               y = freq,
+               fill = npod_match)) +
+  scale_fill_manual(values = sharing_colors) +
+  labs(x= "Sharing",
+       y = "Fraction",
+       fill = "nPOD\nmatch")
+
+print(g_fig_3d)
+
+pdf(file.path(plot_dir,
+              "Figure3D.pdf"),
+    width = 5,
+    height = 4)
+
+print(g_fig_3d)
+
+invisible(dev.off())
+
+```
+
+#Figure 3E
+
+```{r fig_3e}
+
+#Subset to human and note chain
+vdjdb_hu <- vdjdb %>%
+  dplyr::filter(Species == "HomoSapiens") %>%
+  dplyr::mutate(chain = case_when(Gene == "TRA" ~ "a",
+                                  Gene == "TRB" ~ "b",
+                                  TRUE ~ "other"))
+
+exp_non_dups$vdjdb_match <- paste0(exp_non_dups$junction, exp_non_dups$chain) %in% paste0(vdjdb_hu$CDR3, vdjdb_hu$chain)
+
+table(exp_non_dups$tcrGraph_sharing_level, 
+      exp_non_dups$vdjdb_match,
+      exp_non_dups$chain)
+
+tcr_counts_vdjdb <- exp_non_dups %>%
+  dplyr::group_by(tcrGraph_sharing_level, vdjdb_match, chain) %>%
+  dplyr::summarise(n_tcrs = n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(tcrGraph_sharing_level, chain) %>%
+  dplyr::mutate(n_level = sum(n_tcrs),
+                freq = n_tcrs/n_level)
+
+g_fig_3e <- tcr_counts_vdjdb %>%
+  ggplot()+
+  geom_col(aes(x = tcrGraph_sharing_level,
+               y = freq,
+               fill = vdjdb_match)) +
+  scale_fill_manual(values = sharing_colors) +
+  labs(x= "Sharing",
+       y = "Fraction",
+       fill = "VDJdb\nmatch")+
+  facet_wrap(~chain, 
+             ncol = 2)
+
+print(g_fig_3e)
+
+pdf(file.path(plot_dir,
+              "Figure3E.pdf"),
+    width = 5.5,
+    height = 4)
+
+print(g_fig_3e)
+
+invisible(dev.off())
+
+#Stats
+a_cont_mat <- tcr_counts_vdjdb %>%
+  dplyr::filter(chain == "a") %>%
+  pivot_wider(id_cols = vdjdb_match,
+              names_from = tcrGraph_sharing_level,
+              values_from = n_tcrs) %>%
+  dplyr::select(private, public) %>%
+  as.matrix()
+
+b_cont_mat <- tcr_counts_vdjdb %>%
+  dplyr::filter(chain == "b") %>%
+  pivot_wider(id_cols = vdjdb_match,
+              names_from = tcrGraph_sharing_level,
+              values_from = n_tcrs) %>%
+  dplyr::select(private, public) %>%
+  as.matrix()
+
+alpha_fisher <- fisher.test(a_cont_mat)
+beta_fisher <- fisher.test(b_cont_mat)
+
+p_vals <- c("alpha" = alpha_fisher$p.value,
+            "beta" = beta_fisher$p.value)
+
+fdr <- p.adjust(p_vals, method = "fdr")
+
+```
+
+#Figures 4B, 4C
+
+```{r fig_4b_4c}
+
+finalFigWidth = 12
+finalFigHeight = 5.25
+finalFigUnit = "in"
+TRAcol = viridis(1, begin = 0.12)
+TRBcol = viridis(1, begin = 0.88)
+edgeThickness = 1.2
+edgeColor = "grey"
+nodePalette <- list(TRA = TRAcol, TRB = TRBcol)
+
+private_chains <- memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level == "private")
+public_chains <- memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level == "public")
+
+#Subset to equal numbers of graph structure in each case
+
+
+privateTcrGraph <- makeTcrGraph(private_chains,  link = "junction")
+publicTcrGraph <- makeTcrGraph(public_chains,  link = "junction")
+
+publicGraphs <- getClonesFromTcrGraph(publicTcrGraph, 
+                                      maxA = 100,
+                                      maxB = 100,
+                                      format = "full", 
+                                      link="junction")
+
+nPublicGraphs <- length(unique(publicSubgraphs$cloneId))
+
+privateGraphs <- getClonesFromTcrGraph(privateTcrGraph, 
+                                       maxA = 100,
+                                       maxB = 100,
+                                       format = "full", 
+                                       link="junction")
+
+privateClones <- unique(privateGraphs$cloneId)
+set.seed(4567)
+subPrivateClones <- sample(privateClones, nPublicGraphs)
+
+subPrivateGraphs <- privateGraphs %>%
+  dplyr::filter(cloneId %in% subPrivateClones)
+
+sub_private_chains <- private_chains %>%
+  dplyr::filter(libid %in% subPrivateGraphs$libid)
+
+subPrivateTcrGraph <- makeTcrGraph(sub_private_chains,  link = "junction")
+
+# Prep graphs
+subPrivateIGraph <- tcrGraphToIgraph(subPrivateTcrGraph)
+publicIGraph <- tcrGraphToIgraph(publicTcrGraph)
+
+# Common plotting elements
+graphTheme <- function(...){
+  theme(
+    panel.background = element_blank(),
+    legend.background = element_blank(),
+    legend.key = element_rect(fill = NA),
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.title = element_text(face = "bold"),
+    ...
+  )
+}
+
+# Helper function to extract legend, from 
+# http://www.sthda.com/english/wiki/wiki.php?id_contents=7930
+getLegend<-function(myggplot){
+  tmp <- ggplot_gtable(ggplot_build(myggplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+
+# Set a couple of variables to make plotting easier
+# Note: names(vertex_attr(graph)) will give a list of vertex/node attributes
+V(subPrivateIGraph)$`Number of Cells` <- V(subPrivateIGraph)$value
+V(subPrivateIGraph)$Chain <- V(subPrivateIGraph)$group
+V(publicIGraph)$`Number of Cells` <- V(publicIGraph)$value
+V(publicIGraph)$Chain <- V(publicIGraph)$group
+
+subPrivateFrPlot <- ggraph(subPrivateIGraph, "fr") +
+  geom_edge_link(
+    edge_width = edgeThickness,
+    edge_color = edgeColor
+  ) +
+  geom_node_point(
+    aes(fill = Chain, size = `Number of Cells`),
+    shape = 21,
+    color = "black"
+  ) +
+  scale_fill_manual(values = nodePalette) +
+  guides(fill = guide_legend(override.aes = list(size = 5))) +
+  ggtitle("Privately-Expanded Clones") +
+  graphTheme()
+
+publicFrPlot <- ggraph(publicIGraph, "fr") +
+  geom_edge_link(
+    edge_width = edgeThickness,
+    edge_color = edgeColor
+  ) +
+  geom_node_point(
+    aes(fill = Chain, size = `Number of Cells`),
+    shape = 21,
+    color = "black"
+  ) +
+  scale_fill_manual(values = nodePalette) +
+  guides(fill = guide_legend(override.aes = list(size = 5))) +
+  ggtitle("Publicly-Shared Clones") +
+  graphTheme(legend.position = "none")
+
+legendFrPlot <- getLegend(subPrivateFrPlot)
+subPrivateFrPlot <- subPrivateFrPlot + theme(legend.position = "none")
+
+# create layout and save
+frLayout <- 
+  grid.arrange(
+    subPrivateFrPlot,
+    publicFrPlot,
+    legendFrPlot, 
+    ncol = 3,
+    widths = c(1,1,0.3)
+  )
+ggsave(
+  filename = file.path(plot_dir, "Figure4_B_C.pdf"),
+  width = finalFigWidth,
+  height = finalFigHeight,
+  units = finalFigUnit,
+  frLayout
+)
+
+
+
+```
+
+#Figure 4E
+
+```{r fig_4e}
+
+#Count numbers of unique TRB associated with TRA juncts
+
+exp_alpha <- exp_chains %>%
+  dplyr::filter(chain == "a")%>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction,
+                tcrGraph_sharing_level)
+
+exp_beta <- exp_chains %>%
+  dplyr::filter(chain == "b")%>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction,
+                tcrGraph_sharing_level)
+
+
+possible_combs <- full_join(exp_alpha,
+                            exp_beta,
+                            by = c("libid", "tcrGraph_sharing_level")) %>%
+  dplyr::select(-one_of("libid")) %>%
+  unique() %>%
+  dplyr::filter(!is.na(junction.x),
+                !is.na(junction.y))
+
+#Count betas per alpha
+
+beta_counts <- possible_combs %>%
+  dplyr::group_by(junction.x, 
+                  tcrGraph_sharing_level) %>%
+  dplyr::summarise(n_beta = length(unique(junction.y)))
+
+
+g_fig_4e <- beta_counts %>%
+  ggplot(aes(x = n_beta,
+             fill = tcrGraph_sharing_level))+
+  geom_bar()+
+  scale_fill_manual(values = sharing_colors) +
+  labs(x = "Number unique TRB junctions/\nuniqueTRA junction",
+       y = "Number of junctions")+
+  facet_wrap(~tcrGraph_sharing_level,
+             ncol = 2,
+             scales = "free_y")
+  
+  print(g_fig_4e)
+  
+  pdf(file.path(plot_dir,
+                "Figure4E.pdf"),
+      height = 5, 
+      width = 9)
+  
+  print(g_fig_4e)
+  
+  invisible(dev.off())
+  
+  #stats
+  
+  #1 vs all fisher test
+  
+ cont_matrix <-  table(beta_counts$tcrGraph_sharing_level, beta_counts$n_beta >1) %>% as.matrix()
+ 
+ fisher.test(cont_matrix)
+
+```
+
+
+#Figure 4F
+
+```{r fig_4f}
+
+#Count numbers of unique TRB associated with TRA juncts
+
+exp_alpha <- exp_chains %>%
+  dplyr::filter(chain == "a")%>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction,
+                tcrGraph_sharing_level,
+                study_group)
+
+exp_beta <- exp_chains %>%
+  dplyr::filter(chain == "b")%>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction,
+                tcrGraph_sharing_level,
+                study_group)
+
+
+possible_combs <- full_join(exp_alpha,
+                            exp_beta,
+                            by = c("libid", 
+                                   "tcrGraph_sharing_level",
+                                   "study_group")) %>%
+  dplyr::select(-one_of("libid")) %>%
+  unique() %>%
+  dplyr::filter(!is.na(junction.x),
+                !is.na(junction.y))
+
+#Count betas per alpha
+
+beta_counts <- possible_combs %>%
+  dplyr::group_by(junction.x, 
+                  tcrGraph_sharing_level,
+                  study_group) %>%
+  dplyr::summarise(n_beta = length(unique(junction.y)))
+
+
+g_fig_4f <- beta_counts %>%
+  ggplot(aes(x = n_beta,
+             fill = tcrGraph_sharing_level))+
+  geom_bar()+
+  scale_fill_manual(values = sharing_colors) +
+  labs(x = "Number unique TRB junctions/\nuniqueTRA junction",
+       y = "Number of junctions")+
+  facet_grid(tcrGraph_sharing_level ~ study_group,
+             scales = "free_y")
+  
+  print(g_fig_4f)
+  
+  pdf(file.path(plot_dir,
+                "Figure4F.pdf"),
+      height = 5, 
+      width = 9)
+  
+  print(g_fig_4f)
+  
+  invisible(dev.off())
+  
+  #stats
+  
+  #1 vs all fisher test
+  
+ cont_matrix_hc <-  table(beta_counts[beta_counts$study_group == "HC",]$tcrGraph_sharing_level, beta_counts[beta_counts$study_group == "HC",]$n_beta >1) %>% as.matrix()
+ 
+ cont_matrix_newt1d <-  table(beta_counts[beta_counts$study_group == "new onset T1D",]$tcrGraph_sharing_level, beta_counts[beta_counts$study_group == "new onset T1D",]$n_beta >1) %>% as.matrix()
+ 
+cont_matrix_t1d <-  table(beta_counts[beta_counts$study_group == "T1D",]$tcrGraph_sharing_level, beta_counts[beta_counts$study_group == "T1D",]$n_beta >1) %>% as.matrix()
+ 
+ 
+fisher_hc <- fisher.test(cont_matrix_hc)
+fisher_newt1d <- fisher.test(cont_matrix_newt1d)
+fisher_t1d <-  fisher.test(cont_matrix_t1d)
+ 
+ p_val <- c("HC" = fisher_hc$p.value,
+             "newT1D" = fisher_newt1d$p.value,
+             "T1D" = fisher_t1d$p.value)
+ 
+ fdr <- p.adjust(p_val, method = "fdr")
+
+```
+
+#Figure 5A
+
+```{r fig5A}
+
+#Get pairs of TRBs sharing a TRA
+
+#Count betas that correspond to each alpha
+public_beta <- exp_chains %>%
+  dplyr::filter(tcrGraph_sharing_level == "public") %>%
+  dplyr::filter(chain == "b") %>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction)
+
+public_alpha <- exp_chains %>%
+  dplyr::filter(tcrGraph_sharing_level == "public") %>%
+  dplyr::filter(chain == "a")%>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction)
+
+
+possible_combs <- full_join(public_alpha,
+                            public_beta,
+                            by = c("libid")) %>%
+  dplyr::select(-one_of("libid")) %>%
+  unique()
+
+alphas_w_mult_betas <- possible_combs %>%
+  dplyr::filter(!is.na(junction.y),
+                !is.na(junction.x)) %>%
+  dplyr::group_by(junction.x) %>%
+  dplyr::summarise(n_beta = length(unique(junction.y))) %>%
+  dplyr::filter(n_beta >= 2)
+
+mult_beta_combs <- possible_combs %>%
+  dplyr::filter(junction.x %in% alphas_w_mult_betas$junction.x,
+                !is.na(junction.y))
+
+dist_vec <- numeric(0)
+
+for(alpha in unique(mult_beta_combs$junction.x)){
+  
+  beta_sub <- mult_beta_combs$junction.y[mult_beta_combs$junction.x == alpha]
+  beta_dist <- stringdistmatrix(beta_sub, 
+                          beta_sub,
+                          method = "lv")
+  
+  beta_dist <- beta_dist[upper.tri(beta_dist)] %>% as.vector()
+  dist_vec <- c(dist_vec, beta_dist)
+}
+  
+beta_dist_hist <- table(dist_vec) %>% as.data.frame()
+
+#Check
+ggplot(beta_dist_hist) +
+  geom_col(aes(x = dist_vec,
+               y = Freq))
+
+#Get distributions of not expanded TCRB distances
+
+not_exp_betas <- memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level == "not defined") %>%
+  dplyr::filter(chain == "b") %>%
+  dplyr::select(junction) %>%
+  unique()
+
+#Set number of sims
+reps = 1000
+
+#Get number of distances to compute
+n_dist <- length(dist_vec)
+
+set.seed(20210728)
+
+draw_dist <- numeric(0)
+ks_p_val <- numeric(0)
+
+for(i in 1:reps){
+  
+  draws1 <- sample(not_exp_betas$junction, n_dist)
+  draws2 <- sample(not_exp_betas$junction, n_dist)
+  
+  draw_dist_i <- stringdist(draws1,
+                          draws2,
+                          method = "lv")
+  
+  draw_dist <- c(draw_dist, draw_dist_i)
+  
+  ks_result_i <- ks.test(dist_vec,
+                       draw_dist_i)
+  
+  ks_p_val <- c(ks_p_val, ks_result_i$p.value)
+}
+
+med_p <- median(ks_p_val)
+
+## Average over all random draws
+# draw_dist_hist <- table(draw_dist) %>% as.data.frame()
+# colnames(draw_dist_hist) <- c("dist_vec", "Freq")
+# draw_dist_hist$Freq <- draw_dist_hist$Freq/1000
+# draw_dist_hist$dist_vec <- as.numeric(as.character(draw_dist_hist$dist_vec))
+# draw_dist_hist$type <- "random"
+
+## Pick a random hist where med_p == ks_p_val as representative
+med_iter <- which(ks_p_val == med_p)[1]
+draw_dist_med <- draw_dist[c(((med_iter-1)*45+1): (med_iter*45))]
+draw_dist_hist <- table(draw_dist_med) %>% as.data.frame()
+colnames(draw_dist_hist) <- c("dist_vec", "Freq")
+draw_dist_hist$dist_vec <- as.numeric(as.character(draw_dist_hist$dist_vec))
+draw_dist_hist$type <- "random"
+
+beta_dist_hist$type <- "real"
+beta_dist_hist$dist_vec <- as.numeric(as.character(beta_dist_hist$dist_vec))
+
+comb_dist_hist <- bind_rows(beta_dist_hist,
+                            draw_dist_hist)
+
+g_dist <- ggplot(comb_dist_hist) +
+  geom_col(aes(x = dist_vec,
+               y = Freq,
+               fill = type),
+           position = position_dodge2(width = 0.9, preserve = "single"))+
+  labs(x = "Levenshtein distance",
+       y = "Number of junctions",
+       fill = "TCRs")+
+  scale_y_continuous(breaks = scales::pretty_breaks())+
+  xlim(c(0,15))
+
+print(g_dist)
+
+pdf(file.path(plot_dir,
+              "Figure5A.pdf"),
+    width = 5.5,
+    height = 4)
+
+print(g_dist)
+
+invisible(dev.off())
+```
+
+#Figure 5C
+
+```{r fig5C, fig.height=3.5, fig.width=6}
+
+g_5C <- titration %>%
+  dplyr::filter(junction_alpha == "CAVQAGNAGNMLTF") %>%
+  dplyr::filter(concentration != 0.0001) %>%
+  ggplot(aes(x = concentration,
+           y = bg_subtracted_proliferation,
+           group = cloneID,
+           color = cloneID))+
+  geom_point(size=2)+
+  geom_line()+
+  scale_color_manual(values = cloneID_colors, 
+                    name = "")+ 
+  plot_layers+
+  guides(color=guide_legend(nrow=6))+
+  theme(text = element_text(size=18),
+        axis.text.x = element_text(angle = -60, hjust = 0))
+
+print(g_5C)
+
+pdf(file.path(plot_dir, "Figure5C.pdf"),
+    height=3.5,
+    width=6)
+
+print(g_5C)
+
+invisible(dev.off())
+  
+
+```
+
+#Figure S2
+
+```{r ec_50_fits}
+
+
+fits$cloneID <- fits$Clone_ID
+
+titration <- left_join(titration, fits, by = "cloneID")
+
+```
+
+```{r fig_s2, fig.height=10, fig.width=7}
+
+#Write EC-50 on the S2 plots, if < 0.01, note this as an upper bound
+
+titration$ec50_text <- round(titration$lin_median, 2)
+
+titration$ec50_text <- case_when(titration$ec50_text < 0.01 ~ "EC-50 < 0.01",
+                                 titration$ec50_text > 10 ~ "EC-50 > 10.0",
+                                 ((titration$ec50_text >= 0.01) & (titration$ec50_text<=10))~ paste0("EC50 = ", titration$ec50_text))
+
+titration_text <- titration %>%
+  dplyr::select(clone_spec, ec50_text) %>%
+  unique()
+
+g_s2 <- titration %>%
+  dplyr::filter(concentration != 0.0001)  %>% #Remove no pep control from plots 
+  ggplot(aes(x = concentration,
+           y = bg_subtracted_proliferation,
+           group = clone_spec),
+         color = "black")+
+  geom_point(size=2)+
+  geom_line()+
+  plot_layers+
+  geom_text(titration_text, mapping= aes(x = 0.012, y = 75, label = ec50_text), size=3, hjust = 0)+
+  facet_wrap(~clone_spec, ncol = 4) +
+  theme(text = element_text(size=18),
+        axis.text.x = element_text(angle = -60, hjust = 0),
+        strip.text.x = element_text(size = 12,margin = margin( b = 4, t = 2) ))
+
+print(g_s2)
+
+pdf(file.path(plot_dir, "FigureS2.pdf"),
+    height=10,
+    width=7)
+
+print(g_s2)
+
+invisible(dev.off())
+
+
+```
+
+#Figure S3
+
+```{r fig_s_3, fig.height=4.5, fig.width=6}
+
+g_s3 <- tcrs %>%
+  dplyr::mutate(seq_name = recode(peptide_specificity, 
+                                  "none" = "Other",
+                                  "galactosylceramide" = "Other",
+                                  "multiple" = "Multiple GAD65"),
+                seq_name = as.factor(seq_name),
+                seq_name = fct_relevel(seq_name, "Other", after = Inf),
+                seq_name = fct_relevel(seq_name, "Multiple GAD65", after = 7)) %>%
+  ggplot(aes(x= seq_name,
+           fill = broad_group,
+           group = interaction(cloneID, broad_group)))+
+  geom_bar(colour = "black")+
+  scale_fill_manual(values = group_colors,
+                    drop = FALSE)+
+  labs(x = "",
+       y = "Number of TCRs",
+       fill = "")+
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) 
+
+print(g_s3)
+
+pdf(file.path(plot_dir, "FigureS3.pdf"),
+    height=4,
+    width=6)
+
+print(g_s3)
+
+invisible(dev.off())
+
+```
+
+#Figure S5 Simpson's diversity metric
+
+```{r fig_s5}
+
+#TCR div calculation
+
+ndraws <- 1000
+nsamples <- 30
+div_stats <- data.frame(project = character(length(unique(memory_chains$project))),
+                        group = character(length(unique(memory_chains$project))),
+                        study_group_sort = character(length(unique(memory_chains$project))),
+                        donor_id = character(length(unique(memory_chains$project))),
+                        shan_entropy = numeric(length(unique(memory_chains$project))),
+                        simps_div = numeric(length(unique(memory_chains$project))),
+                        sort = logical(length(unique(memory_chains$project))))
+
+p <- 0
+for(i in unique(memory_chains$project)){
+  p <- p+1
+  temp_tcr <- dplyr::filter(memory_chains, project == i)
+   if(nrow(temp_tcr) <= 30){
+     next
+   }
+    print(i)
+    entropy_sub <- numeric(ndraws)
+    simps_sub <- numeric(ndraws)
+  for(j in 1:ndraws){
+    sample_seqs <- dplyr::sample_n(temp_tcr, size = nsamples, replace=FALSE)
+    sample_counts <- plyr::count(sample_seqs$junction)
+    entropy_sub[j] <- entropy::entropy(sample_counts$freq, method="ML", unit="log2")
+    simps_sub[j] <- 1 - sum((sample_counts$freq/sum(sample_counts$freq))^2)
+  }
+  #add project id, disease group 
+  div_stats$group[p] <- as.character(unique(temp_tcr$study_group))
+  div_stats$project[p] <- i
+  div_stats$donor_id[p] <- unique(temp_tcr$donor_id)
+  div_stats$shan_entropy[p] <- median(entropy_sub)
+  div_stats$simps_div[p] <- median(simps_sub)
+  
+}
+
+#remove 0s - cases with fewer than 30 cells/experiment
+div_stats <- dplyr::filter(div_stats, shan_entropy != 0)
+
+#For repeated donors, average
+div_stats_avg <- div_stats %>% 
+  group_by(donor_id, group) %>% 
+  summarize(ave = mean(simps_div))
+
+div_stats_avg$group[div_stats_avg$group == "new onset T1D"] <- "newT1D"
+
+
+g_simpsdiv <- ggplot(div_stats_avg, aes(group, ave, color=group)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_quasirandom() + 
+  ylab("Simpson's diversity metric") +
+  xlab(" ") +
+  scale_color_manual(values=c("red", "purple", "blue"), guide = F) +
+  theme(axis.text.x = element_text(size=14), 
+        axis.title.y = element_text(size=16), 
+        axis.text.y = element_text(size=14))  +
+  ylim(0.80, 1) 
+
+print(g_simpsdiv)
+
+pdf(file.path(plot_dir,
+              "FigureS5.pdf"),
+    height = 5,
+    width = 4.5)
+
+print(g_simpsdiv)
+
+invisible(dev.off())
+
+#Run stats
+pairwise.wilcox.test(div_stats_avg$ave, 
+                     div_stats_avg$group,
+                     p.adjust.method = "none")
+```
+
+#Figure S6 Graph plots
+
+```{r fig_s6}
+
+finalFigWidth = 12
+finalFigHeight = 5.25
+finalFigUnit = "in"
+TRAcol = viridis(1, begin = 0.12)
+TRBcol = viridis(1, begin = 0.88)
+edgeThickness = 1.2
+edgeColor = "grey"
+nodePalette <- list(TRA = TRAcol, TRB = TRBcol)
+
+private_chains <- memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level == "private")
+public_chains <- memory_chains %>%
+  dplyr::filter(tcrGraph_sharing_level == "public")
+
+privateTcrGraph <- makeTcrGraph(private_chains,  link = "junction")
+publicTcrGraph <- makeTcrGraph(public_chains,  link = "junction")
+
+# Prep graphs
+privateIGraph <- tcrGraphToIgraph(privateTcrGraph)
+publicIGraph <- tcrGraphToIgraph(publicTcrGraph)
+
+# Common plotting elements
+graphTheme <- function(...){
+  theme(
+    panel.background = element_blank(),
+    legend.background = element_blank(),
+    legend.key = element_rect(fill = NA),
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.title = element_text(face = "bold"),
+    ...
+  )
+}
+
+# Helper function to extract legend, from 
+# http://www.sthda.com/english/wiki/wiki.php?id_contents=7930
+getLegend<-function(myggplot){
+  tmp <- ggplot_gtable(ggplot_build(myggplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)
+}
+
+# Set a couple of variables to make plotting easier
+# Note: names(vertex_attr(graph)) will give a list of vertex/node attributes
+V(privateIGraph)$`Number of Cells` <- V(privateIGraph)$value
+V(privateIGraph)$Chain <- V(privateIGraph)$group
+V(publicIGraph)$`Number of Cells` <- V(publicIGraph)$value
+V(publicIGraph)$Chain <- V(publicIGraph)$group
+
+# Plot Option 1: 'Stress' Layout
+####################################################################
+privateStressPlot <- ggraph(privateIGraph, "stress", mds = FALSE) +
+  geom_edge_link(
+    edge_width = edgeThickness,
+    edge_color = edgeColor
+  ) +
+  geom_node_point(
+    aes(fill = Chain, size = `Number of Cells`),
+    shape = 21,
+    color = "black"
+  ) +
+  scale_fill_manual(values = nodePalette) +
+  guides(fill = guide_legend(override.aes = list(size = 5))) +
+  ggtitle("Privately-Expanded Clones") +
+  graphTheme()
+
+publicStressPlot <- ggraph(publicIGraph, "stress", mds = FALSE) +
+  geom_edge_link(
+    edge_width = edgeThickness,
+    edge_color = edgeColor
+  ) +
+  geom_node_point(
+    aes(fill = Chain, size = `Number of Cells`),
+    shape = 21,
+    color = "black"
+  ) +
+  scale_fill_manual(values = nodePalette) +
+  guides(fill = guide_legend(override.aes = list(size = 5))) +
+  ggtitle("Publicly-Shared Clones") +
+  graphTheme(legend.position = "none")
+
+legendStressPlot <- getLegend(privateStressPlot)
+privateStressPlot <- privateStressPlot + theme(legend.position = "none")
+
+# create layout and save
+stressLayout <- 
+  grid.arrange(
+    privateStressPlot,
+    publicStressPlot,
+    legendStressPlot, 
+    layout_matrix = rbind(c(1,3), c(1,3), c(2,3)), #layout_matrix = rbind(c(1,3), c(2,3)), #c(1,3),
+    widths = c(1,0.3)
+  )
+ggsave(
+  filename = file.path(plot_dir, "FigureS6.pdf"),
+  device = "pdf",
+  width = finalFigWidth,
+  height = finalFigHeight,
+  units = finalFigUnit,
+  stressLayout
+)
+
+```
+
+#Figure S7
+
+```{r fig_s_7}
+
+#Compile stats for table s7
+
+privateTcrGraph <- makeTcrGraph(private_chains,  link = "junction")
+publicTcrGraph <- makeTcrGraph(public_chains,  link = "junction")
+
+privateSubgraphs <- getClonesFromTcrGraph(privateTcrGraph, maxA = Inf, maxB = Inf, format = "full", link="junction")
+publicSubgraphs <- getClonesFromTcrGraph(publicTcrGraph, maxA = Inf, maxB = Inf, format = "full", link="junction")
+
+#Count #'s of 1:1 1:many and many:1 TRA:TRB
+
+privateSubgraphCounts <- privateSubgraphs %>%
+  dplyr::group_by(cloneId) %>%
+  dplyr::summarise(nAlpha = length(unique(junction[chain == "a"])),
+                   nBeta = length(unique(junction[chain == "b"]))) %>%
+  dplyr::mutate(sharing = "private")
+
+publicSubgraphCounts <- publicSubgraphs %>%
+  dplyr::group_by(cloneId) %>%
+  dplyr::summarise(nAlpha = length(unique(junction[chain == "a"])),
+                   nBeta = length(unique(junction[chain == "b"]))) %>%
+  dplyr::mutate(sharing = "public")
+
+subgraphCounts <- bind_rows(privateSubgraphCounts,
+                            publicSubgraphCounts)
+  
+#table(subgraphCounts$nAlpha, subgraphCounts$nBeta)
+
+subgraphCounts <- subgraphCounts %>%
+  dplyr::mutate(class = case_when(nAlpha == 0 & nBeta >= 1 ~ "singleChain",
+                                  nAlpha >= 1 & nBeta == 0 ~ "singleChain",
+                                  nAlpha == 1 & nBeta == 1 ~ "pair",
+                                  nAlpha == 1 & nBeta > 1 ~ "multipleBeta",
+                                  nAlpha > 1 & nBeta == 1 ~ "multipleAlpha",
+                                  nAlpha > 1 & nBeta > 1 ~ "multipleBoth",
+                                  TRUE ~ "other")) %>%
+  dplyr::group_by(sharing, class) %>%
+  dplyr::summarise(numSubgraphs = n()) %>%
+  pivot_wider(id_cols = "sharing",
+              names_from = "class",
+              values_from = "numSubgraphs",
+              values_fill = 0) %>%
+  dplyr::mutate(total = sum(singleChain, 
+                            pair, 
+                            multipleAlpha, 
+                            multipleBeta,
+                            multipleBoth))
+
+#Stats
+
+multBothFisher <- subgraphCounts %>%
+  dplyr::select(sharing, multipleBoth, total) %>%
+  dplyr::mutate(diff = total-multipleBoth) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(multipleBoth, diff) %>%
+  fisher.test()
+
+multAlphaFisher <- subgraphCounts %>%
+  dplyr::select(sharing, multipleAlpha, total) %>%
+  dplyr::mutate(diff = total-multipleAlpha) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(multipleAlpha, diff) %>%
+  fisher.test()
+
+multBetaFisher <- subgraphCounts %>%
+  dplyr::select(sharing, multipleBeta, total) %>%
+  dplyr::mutate(diff = total-multipleBeta) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(multipleBeta, diff) %>%
+  fisher.test()
+
+pairFisher <- subgraphCounts %>%
+  dplyr::select(sharing, pair, total) %>%
+  dplyr::mutate(diff = total-pair) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(pair, diff) %>%
+  fisher.test()
+
+singleChainFisher <- subgraphCounts %>%
+  dplyr::select(sharing, singleChain, total) %>%
+  dplyr::mutate(diff = total-singleChain) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(singleChain, diff) %>%
+  fisher.test()
+
+pvals <- c("multBoth" = multBothFisher$p.value,
+           "multAlpha" = multAlphaFisher$p.value,
+           "multBeta" = multBetaFisher$p.value,
+           "pair" = pairFisher$p.value,
+           "singleChain" = singleChainFisher$p.value)
+
+FDRs <- p.adjust(pvals, method = "fdr")
+
+```
+
+#Figure S8
+
+```{r fig_s8}
+
+#Count numbers of unique TRA associated with TRB juncts
+
+exp_alpha <- exp_chains %>%
+  dplyr::filter(chain == "a")%>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction,
+                tcrGraph_sharing_level)
+
+exp_beta <- exp_chains %>%
+  dplyr::filter(chain == "b")%>%
+  dplyr::select(libid, 
+                v_gene,
+                j_gene,
+                junction,
+                tcrGraph_sharing_level)
+
+
+possible_combs <- full_join(exp_alpha,
+                            exp_beta,
+                            by = c("libid", "tcrGraph_sharing_level")) %>%
+  dplyr::select(-one_of("libid")) %>%
+  unique() %>%
+  dplyr::filter(!is.na(junction.x),
+                !is.na(junction.y))
+
+#Count betas per alpha
+
+alpha_counts <- possible_combs %>%
+  dplyr::group_by(junction.y, 
+                  tcrGraph_sharing_level) %>%
+  dplyr::summarise(n_alpha = length(unique(junction.x)))
+
+
+g_s8 <- alpha_counts %>%
+  ggplot(aes(x = n_alpha,
+             fill = tcrGraph_sharing_level))+
+  geom_bar()+
+  scale_fill_manual(values = sharing_colors) +
+  labs(x = "Number unique TRA junctions/\nuniqueTRB junction",
+       y = "Number of junctions")+
+  facet_wrap(~tcrGraph_sharing_level,
+             ncol = 2,
+             scales = "free_y")
+  
+  print(g_s8)
+  
+  pdf(file.path(plot_dir,
+                "FigureS8.pdf"),
+      height = 5, 
+      width = 9)
+  
+  print(g_s8)
+  
+  invisible(dev.off())
+  
+  #stats
+  
+  #1 vs all fisher test
+  
+ cont_matrix <-  table(alpha_counts$tcrGraph_sharing_level, alpha_counts$n_alpha >1) %>% as.matrix()
+ 
+ fisher.test(cont_matrix)
+
+```
